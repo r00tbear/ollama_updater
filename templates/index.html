@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Ollama Models</title>
+    <!-- Include Bootstrap CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css">
+    <!-- Include Axios -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <!-- Include Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <style>
+        .loading-spinner {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+        }
+        .fade-in {
+            opacity: 0;
+            animation: fadeInAnimation 0.5s forwards;
+        }
+        @keyframes fadeInAnimation {
+            to {
+                opacity: 1;
+            }
+        }
+        .copy-container {
+            display: flex;
+            align-items: center;
+        }
+        .copy-command {
+            flex-grow: 1;
+            padding: 5px;
+            border: 1px solid #ced4da;
+            border-radius: 5px;
+        }
+        .copy-button {
+            margin-left: 10px;
+        }
+        .table td, .table th {
+            vertical-align: middle;
+        }
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+        }
+        .status-badge .info-icon {
+            margin-left: 5px;
+            cursor: pointer;
+            color: #0d6efd;
+        }
+        /* Align toggle switch and label */
+        .form-switch {
+            display: flex;
+            align-items: center;
+        }
+        .form-switch .form-check-label {
+            margin-left: 0.5rem;
+            margin-bottom: 0;
+        }
+        /* Progress list styling */
+        #progress-list {
+            list-style: none;
+            padding: 0;
+        }
+        #progress-list li {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+        #progress-list li .step-icon {
+            width: 24px;
+            height: 24px;
+            margin-right: 10px;
+            color: #6c757d;
+        }
+        #progress-list li.completed .step-icon {
+            color: #28a745;
+        }
+        #progress-list li.error .step-icon {
+            color: #dc3545;
+        }
+        /* Center progress container */
+        #progress-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+    </style>
+</head>
+<body class="bg-light">
+
+<div id="progress-container">
+    <h1 class="text-center mb-4">Ollama Models</h1>
+    <!-- Progress List -->
+    <ul id="progress-list">
+        <li id="step-1">
+            <i class="fas fa-circle-notch fa-spin step-icon"></i>
+            Checking if Ollama is installed.
+        </li>
+        <li id="step-2">
+            <i class="fas fa-circle-notch fa-spin step-icon"></i>
+            Retrieving the list of installed models.
+        </li>
+        <li id="step-3">
+            <i class="fas fa-circle-notch fa-spin step-icon"></i>
+            Fetching server model information.
+        </li>
+        <li id="step-4">
+            <i class="fas fa-circle-notch fa-spin step-icon"></i>
+            Displaying models and statuses.
+        </li>
+    </ul>
+</div>
+
+<div class="container mt-5" style="display: none;">
+    <h1 class="text-center mb-4">Ollama Models</h1>
+
+    <!-- Search Bar and Filter -->
+    <div id="controls" class="row mb-3" style="display: none;">
+        <div class="col-md-8">
+            <input type="text" class="form-control" placeholder="Search models..." id="search-input">
+        </div>
+        <div class="col-md-4 text-end">
+            <div class="form-check form-switch" style="justify-content: flex-end;">
+                <input class="form-check-input" type="checkbox" id="filter-updates">
+                <label class="form-check-label" for="filter-updates">Show only models needing update</label>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading" class="loading-spinner" style="display: none;">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading models...</span>
+        </div>
+    </div>
+    <table class="table table-hover mt-4" style="display: none;">
+        <thead class="table-dark">
+            <tr>
+                <th>Model Name</th>
+                <th>Local Update</th>
+                <th>Server Update</th>
+                <th>Status</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody id="model-list">
+            <!-- Models will be dynamically loaded here -->
+        </tbody>
+    </table>
+</div>
+
+<!-- Modals for Model Info will be dynamically added here -->
+<div id="modals-container"></div>
+
+<!-- Include Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    let models = [];
+
+    // Function to sanitize model names for use in IDs and selectors
+    function sanitizeForId(name) {
+        return name.replace(/[^a-zA-Z0-9_-]/g, '-');
+    }
+
+    // Function to update progress steps
+    function updateProgress(stepNumber, status, message) {
+        const stepItem = document.getElementById(`step-${stepNumber}`);
+        const icon = stepItem.querySelector('.step-icon');
+        const text = stepItem.querySelector('.step-text');
+
+        if (status === 'completed') {
+            icon.classList.remove('fa-circle-notch', 'fa-spin');
+            icon.classList.add('fa-check-circle');
+            stepItem.classList.add('completed');
+        } else if (status === 'error') {
+            icon.classList.remove('fa-circle-notch', 'fa-spin');
+            icon.classList.add('fa-times-circle');
+            stepItem.classList.add('error');
+            if (message) {
+                stepItem.innerHTML += `<div class="text-danger">${message}</div>`;
+            }
+        }
+    }
+
+    // Function to copy command
+    function copyCommand(modelName) {
+        const sanitizedModelName = sanitizeForId(modelName);
+        const commandInput = document.querySelector(`#model-${sanitizedModelName} .copy-command`);
+        const commandText = commandInput.value;
+        const copyButton = document.querySelector(`#model-${sanitizedModelName} .copy-button`);
+
+        if (navigator.clipboard && window.isSecureContext) {
+            // Use the Clipboard API
+            navigator.clipboard.writeText(commandText).then(() => {
+                // Show tooltip
+                const tooltip = new bootstrap.Tooltip(copyButton, {
+                    title: "Copied!",
+                    trigger: 'manual'
+                });
+                tooltip.show();
+
+                // Hide the tooltip after 2 seconds
+                setTimeout(() => {
+                    tooltip.hide();
+                    tooltip.dispose();
+                }, 2000);
+            }, () => {
+                alert('Failed to copy command.');
+            });
+        } else {
+            // Fallback to older execCommand method
+            commandInput.select();
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    // Show tooltip
+                    const tooltip = new bootstrap.Tooltip(copyButton, {
+                        title: "Copied!",
+                        trigger: 'manual'
+                    });
+                    tooltip.show();
+
+                    // Hide the tooltip after 2 seconds
+                    setTimeout(() => {
+                        tooltip.hide();
+                        tooltip.dispose();
+                    }, 2000);
+                } else {
+                    alert('Failed to copy command.');
+                }
+            } catch (err) {
+                alert('Failed to copy command.');
+            }
+        }
+    }
+
+    // Function to recheck model
+    function recheckModel(modelName) {
+        const sanitizedModelName = sanitizeForId(modelName);
+        const recheckButton = document.querySelector(`#model-${sanitizedModelName} .recheck-button`);
+        recheckButton.disabled = true;
+        recheckButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rechecking...';
+
+        axios.get(`/api/recheck_model/${encodeURIComponent(modelName)}`)
+            .then(response => {
+                const model = models.find(m => m.name === modelName);
+                if (model) {
+                    model.server_version = response.data.server_version;
+                    model.server_update = response.data.server_update;
+                    model.error = response.data.error;
+                    if (!model.error && model.server_version !== 'Unknown') {
+                        model.needs_update = model.installed_version !== model.server_version;
+                    } else {
+                        model.needs_update = false;
+                    }
+                    displayModels(models);
+                }
+            })
+            .catch(error => {
+                console.error('Error rechecking model:', error);
+                alert(`Failed to recheck model ${modelName}.`);
+            })
+            .finally(() => {
+                recheckButton.disabled = false;
+                recheckButton.innerHTML = 'Recheck';
+            });
+    }
+
+    // Function to check if Ollama is installed
+    function checkOllamaInstalled() {
+        return axios.get('/api/check_ollama')
+            .then(response => {
+                if (response.data.installed) {
+                    updateProgress(1, 'completed');
+                    return true;
+                } else {
+                    updateProgress(1, 'error', 'Ollama is not installed.');
+                    displayError('Ollama is not installed on your system.');
+                    throw new Error('Ollama not installed');
+                }
+            })
+            .catch(error => {
+                updateProgress(1, 'error', 'Failed to check Ollama installation.');
+                displayError('Failed to check if Ollama is installed.');
+                throw error;
+            });
+    }
+
+    // Function to load models
+    function loadModels() {
+        updateProgress(2, 'completed');
+        updateProgress(3, 'completed');
+
+        axios.get('/api/models')
+            .then(response => {
+                if (response.data.error) {
+                    displayError(response.data.error);
+                    throw new Error(response.data.error);
+                }
+                models = response.data;
+                document.getElementById('controls').style.display = 'flex';
+                displayModels(models);
+                updateProgress(4, 'completed');
+
+                // Hide progress container and show main container
+                document.getElementById('progress-container').style.display = 'none';
+                document.querySelector('.container').style.display = '';
+                document.querySelector('.table').style.display = '';
+            })
+            .catch(error => {
+                console.error('Error fetching models:', error);
+                displayError('There was an error loading the models. Please try again later.');
+                updateProgress(4, 'error', 'Failed to display models.');
+            });
+    }
+
+    function displayError(message) {
+        document.getElementById('progress-container').style.display = 'none';
+        document.getElementById('loading').style.display = 'none';
+        const container = document.querySelector('.container');
+        container.style.display = '';
+        container.innerHTML = `
+            <div class="alert alert-warning" role="alert">
+                <h4 class="alert-heading">Notice</h4>
+                <p>${message}</p>
+                <hr>
+                <p class="mb-0">Please visit <a href="https://ollama.ai" target="_blank">Ollama.ai</a> to download and install Ollama. After installation, you can add models by following the instructions on the website.</p>
+            </div>
+        `;
+    }
+
+    function displayModels(modelsToDisplay) {
+        const modelList = document.getElementById('model-list');
+        const modalsContainer = document.getElementById('modals-container');
+        modelList.innerHTML = '';
+        modalsContainer.innerHTML = '';
+        document.getElementById('loading').style.display = 'none';
+
+        modelsToDisplay.forEach((model, index) => {
+            const sanitizedModelName = sanitizeForId(model.name);
+
+            // Create table row
+            const modelRow = document.createElement('tr');
+            modelRow.id = `model-${sanitizedModelName}`;
+            modelRow.classList.add('fade-in');
+            modelRow.style.animationDelay = `${index * 0.1}s`; // Staggered animation
+            const statusText = model.needs_update ? 'Needs Update' : 'Up-to-date';
+            const statusBadgeHTML = model.needs_update ?
+                `<span class="badge bg-warning text-dark" data-bs-toggle="tooltip" title="This model needs to be updated to the latest version">Needs Update</span>` :
+                `<span class="badge bg-success" data-bs-toggle="tooltip" title="This model is up-to-date">Up-to-date</span>`;
+
+            if (model.error) {
+                statusBadgeHTML = `<span class="badge bg-danger" data-bs-toggle="tooltip" title="Error fetching model information">Error</span>`;
+            }
+
+            modelRow.innerHTML = `
+                <td>${model.name}</td>
+                <td>${model.local_update}</td>
+                <td>${model.server_update}</td>
+                <td>
+                    <span class="status-badge">
+                        ${statusBadgeHTML}
+                        <i class="fas fa-info-circle info-icon" data-bs-toggle="modal" data-bs-target="#infoModal-${sanitizedModelName}"></i>
+                    </span>
+                </td>
+                <td>
+                    ${model.needs_update ?
+                        `<div class="copy-container">
+                            <input type="text" class="copy-command form-control" value="ollama pull ${model.name}" readonly>
+                            <button class="btn btn-primary copy-button" onclick="copyCommand('${model.name}')">Copy</button>
+                        </div>` :
+                        model.error ?
+                        `<button class="btn btn-secondary recheck-button" onclick="recheckModel('${model.name}')">Recheck</button>` :
+                        ''
+                    }
+                </td>
+            `;
+            modelList.appendChild(modelRow);
+
+            // Create modal for model info
+            const modal = document.createElement('div');
+            modal.classList.add('modal', 'fade');
+            modal.id = `infoModal-${sanitizedModelName}`;
+            modal.tabIndex = -1;
+            modal.setAttribute('aria-labelledby', `infoModalLabel-${sanitizedModelName}`);
+            modal.setAttribute('aria-hidden', 'true');
+            modal.innerHTML = `
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="infoModalLabel-${sanitizedModelName}">Model Information - ${model.name}</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p><strong>Local Hash:</strong> ${model.installed_version}</p>
+                            <p><strong>Server Hash:</strong> ${model.server_version}</p>
+                            <p><strong>Local Update:</strong> ${model.local_update}</p>
+                            <p><strong>Server Update:</strong> ${model.server_update}</p>
+                            ${model.error ? '<p class="text-danger">Error fetching server information for this model.</p>' : ''}
+                        </div>
+                        <div class="modal-footer">
+                            ${model.error ? `<button type="button" class="btn btn-secondary" onclick="recheckModel('${model.name}')" data-bs-dismiss="modal">Recheck</button>` : ''}
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            modalsContainer.appendChild(modal);
+        });
+
+        // Initialize Bootstrap tooltips
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    }
+
+    // Search and Filter functionality
+    document.getElementById('search-input').addEventListener('input', filterModels);
+    document.getElementById('filter-updates').addEventListener('change', filterModels);
+
+    function filterModels() {
+        const searchTerm = document.getElementById('search-input').value.toLowerCase();
+        const showOnlyNeedsUpdate = document.getElementById('filter-updates').checked;
+
+        let filteredModels = models;
+
+        if (searchTerm) {
+            filteredModels = filteredModels.filter(model => {
+                const statusText = model.needs_update ? 'needs update' : 'up-to-date';
+                return model.name.toLowerCase().includes(searchTerm) || statusText.includes(searchTerm);
+            });
+        }
+
+        if (showOnlyNeedsUpdate) {
+            filteredModels = filteredModels.filter(model => model.needs_update);
+        }
+
+        displayModels(filteredModels);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Perform steps sequentially
+        checkOllamaInstalled()
+            .then(() => {
+                // Proceed to load models
+                updateProgress(2, 'completed');
+                updateProgress(3, 'completed');
+                loadModels();
+            })
+            .catch(error => {
+                console.error('Initialization error:', error);
+            });
+    });
+</script>
+
+</body>
+</html>
